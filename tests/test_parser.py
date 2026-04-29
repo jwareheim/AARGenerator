@@ -40,7 +40,7 @@ class TestParseSave:
             gamestate_text='date="2200.01.01"',
         )
         with patch("ClauseWizard.cwparse", return_value=[]), \
-             patch("ClauseWizard.cwformat", return_value='{"date":"2200.01.01"}'):
+             patch("ClauseWizard.cwformat", return_value={"date": "2200.01.01"}):
             snapshot = chronicle.parse_save(save_bytes)
         assert isinstance(snapshot, dict)
         assert "date" in snapshot
