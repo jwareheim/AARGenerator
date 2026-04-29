@@ -785,6 +785,25 @@ HTML_PAGE = """<!DOCTYPE html>
     border-color: var(--gold);
     color: var(--gold);
   }
+  .upload-zone.uploading {
+    pointer-events: none;
+    border-color: var(--gold);
+    color: var(--gold);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spinner {
+    width: 0.85rem;
+    height: 0.85rem;
+    border: 2px solid var(--border);
+    border-top-color: var(--gold);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    flex-shrink: 0;
+  }
 
   .stats { font-size: 0.72rem; color: var(--muted); text-align: center; }
 
@@ -922,7 +941,7 @@ HTML_PAGE = """<!DOCTYPE html>
     <div class="chapter-list" id="chapter-list"></div>
     <div class="sidebar-footer">
       <div class="upload-zone" id="upload-zone">
-        ↑ Drop .sav or click<br>to upload
+        <span id="upload-label">↑ Drop .sav or click<br>to upload</span>
         <input type="file" id="file-input" accept=".sav" style="display:none">
       </div>
       <div class="stats" id="stats"></div>
@@ -1063,6 +1082,21 @@ HTML_PAGE = """<!DOCTYPE html>
     document.getElementById('chapter-header').style.display = 'none';
     const prose = document.getElementById('prose');
     prose.textContent = '';
+
+    const zone = document.getElementById('upload-zone');
+    const label = document.getElementById('upload-label');
+    const spinnerEl = document.createElement('div');
+    spinnerEl.className = 'spinner';
+    zone.classList.add('uploading');
+    label.textContent = 'Parsing…';
+    zone.insertBefore(spinnerEl, label);
+
+    function resetUploadZone() {
+      zone.classList.remove('uploading');
+      spinnerEl.remove();
+      label.innerHTML = '↑ Drop .sav or click<br>to upload';
+    }
+
     const cursor = document.createElement('span');
     cursor.className = 'cursor';
     prose.appendChild(cursor);
@@ -1071,10 +1105,12 @@ HTML_PAGE = """<!DOCTYPE html>
 
     const res = await fetch('/api/upload', { method: 'POST', body: form });
     if (!res.ok) {
+      resetUploadZone();
       const err = await res.json().catch(() => ({ error: 'Unknown error.' }));
       prose.textContent = '⚠ ' + (err.error || 'Upload failed.');
       return;
     }
+    resetUploadZone();
 
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
@@ -1104,6 +1140,7 @@ HTML_PAGE = """<!DOCTYPE html>
         if (payload.error) {
           cursor.remove();
           prose.textContent = '⚠ ' + payload.error;
+          resetUploadZone();
           return;
         }
       }
