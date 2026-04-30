@@ -111,7 +111,7 @@ Chapter files are zero-padded three digits (`chapter-001`, not `chapter-1`).
 
 ## Model
 
-Use `claude-sonnet-4-20250514` (defined as `DEFAULT_MODEL` constant). The model name must appear only in `config.json` defaults and the constant — never hardcoded in the API call itself (read from config).
+Use `claude-sonnet-4-6` (defined as `DEFAULT_MODEL` constant). The model name must appear only in `config.json` defaults and the constant — never hardcoded in the API call itself (read from config).
 
 ---
 

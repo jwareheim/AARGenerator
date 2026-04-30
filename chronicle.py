@@ -74,7 +74,7 @@ SCRIPT_DIR = pathlib.Path(__file__).parent
 DATA_DIR = SCRIPT_DIR / "chronicle_data"
 CHAPTERS_DIR = DATA_DIR / "chapters"
 
-DEFAULT_MODEL = "claude-sonnet-4-20250514"
+DEFAULT_MODEL = "claude-sonnet-4-6"
 DEFAULT_WORD_TARGET = 500
 
 SYSTEM_PROMPT = (
@@ -373,6 +373,9 @@ def build_summary_update_prompt(chapter_prose: str, current_summary: dict) -> st
 # =============================================================================
 
 def generate_chapter(prompt: str, api_key: str, model: str):
+    print(f"[chronicle] API request — model: {model}, key: ...{api_key[-8:]}", file=sys.stderr)
+    print(f"[chronicle] system prompt ({len(SYSTEM_PROMPT)} chars): {SYSTEM_PROMPT[:120]}…", file=sys.stderr)
+    print(f"[chronicle] user prompt ({len(prompt)} chars): {prompt[:300]}…", file=sys.stderr)
     client = anthropic.Anthropic(api_key=api_key)
     with client.messages.stream(
         model=model,
@@ -440,6 +443,8 @@ class ChronicleHandler(http.server.BaseHTTPRequestHandler):
             self.handle_upload()
         elif self.path == "/api/config":
             self.handle_config()
+        elif self.path == "/api/meta":
+            self.handle_update_meta()
         elif self.path.endswith("/title"):
             try:
                 n = int(self.path.split("/")[-2])
@@ -470,7 +475,11 @@ class ChronicleHandler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def handle_list_chapters(self):
-        self._send_json(200, {"chapters": list_chapters()})
+        meta = load_meta()
+        self._send_json(200, {
+            "chapters": list_chapters(),
+            "campaign_name": meta.get("campaign_name") or meta.get("empire_name") or "",
+        })
 
     def handle_get_chapter(self, n: int):
         ch = load_chapter(n)
@@ -576,6 +585,14 @@ class ChronicleHandler(http.server.BaseHTTPRequestHandler):
 
         self.wfile.write(b'data: {"done": true}\n\n')
         self.wfile.flush()
+
+    def handle_update_meta(self):
+        body = json.loads(self._read_body())
+        meta = load_meta()
+        if "campaign_name" in body:
+            meta["campaign_name"] = body["campaign_name"].strip()
+        save_meta(meta)
+        self._send_json(200, {"ok": True})
 
     def handle_update_title(self, n: int):
         ch = load_chapter(n)
@@ -740,6 +757,13 @@ HTML_PAGE = """<!DOCTYPE html>
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    cursor: pointer;
+    user-select: none;
+  }
+  .campaign-name:hover::after {
+    content: ' ✎';
+    font-size: 0.7rem;
+    opacity: 0.6;
   }
 
   .chapter-list {
@@ -1007,10 +1031,13 @@ HTML_PAGE = """<!DOCTYPE html>
 
   // ── Chapters ──────────────────────────────────────────────────────────────
 
+  let campaignName = '';
+
   async function loadChapters() {
     const res = await fetch('/api/chapters');
     const data = await res.json();
     chapters = data.chapters || [];
+    campaignName = data.campaign_name || '';
     renderSidebar();
   }
 
@@ -1020,8 +1047,8 @@ HTML_PAGE = """<!DOCTYPE html>
     const stats = document.getElementById('stats');
 
     list.innerHTML = '';
+    name.textContent = campaignName || 'No campaign';
     if (chapters.length === 0) {
-      name.textContent = 'No campaign';
       stats.textContent = '';
       return;
     }
@@ -1146,6 +1173,21 @@ HTML_PAGE = """<!DOCTYPE html>
       }
     }
   }
+
+  // ── Campaign name ─────────────────────────────────────────────────────────
+
+  document.getElementById('campaign-name').addEventListener('click', async () => {
+    const current = campaignName || '';
+    const next = prompt('Campaign name:', current);
+    if (next === null || next.trim() === current) return;
+    await fetch('/api/meta', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ campaign_name: next.trim() }),
+    });
+    campaignName = next.trim();
+    document.getElementById('campaign-name').textContent = campaignName || 'No campaign';
+  });
 
   // ── Edit title ────────────────────────────────────────────────────────────
 
