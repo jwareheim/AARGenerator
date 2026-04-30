@@ -1,0 +1,16 @@
+# Chronicle user data — never commit this
+chronicle_data/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+*.iml
