@@ -46,7 +46,7 @@ pub struct State {
     pub recent_technologies: Vec<String>,
 }
 
-#[derive(Serialize, Default)]
+#[derive(Serialize, Default, Clone)]
 pub struct Leader {
     pub id: Option<i64>,
     pub name: Option<String>,
