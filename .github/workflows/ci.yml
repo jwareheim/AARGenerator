@@ -6,8 +6,30 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install anthropic clausewizard pytest
-      - run: python -m pytest tests/ -v
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ hashFiles('stellaris-parser/Cargo.lock') }}
+
+      - name: Run Rust tests and build binary
+        working-directory: stellaris-parser
+        run: |
+          cargo test
+          mkdir -p ../bin
+          cp target/debug/stellaris-parser ../bin/
+
+      - name: Install Python dependencies
+        run: pip install anthropic pytest
+
+      - name: Run Python tests
+        run: python -m pytest tests/ -v
