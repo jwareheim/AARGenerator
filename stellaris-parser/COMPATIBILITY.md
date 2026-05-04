@@ -6,8 +6,8 @@ Tested patches and known field-format variations across Stellaris versions.
 
 | Stellaris patch | Parser version | Status | Notes |
 |-----------------|----------------|--------|-------|
-| Cetus v4.3.2 | 1.0.0 | ✅ Confirmed | Fixture in `tests/fixtures/sample.sav` |
-| Cetus v4.3.5 | 1.0.0 | ✅ Confirmed | Phase 0 exploration save |
+| Cetus v4.3.2 | 0.1.1 | ✅ Confirmed | Fixture in `tests/fixtures/sample.sav` |
+| Cetus v4.3.5 | 0.1.1 | ✅ Confirmed | Phase 0 exploration save |
 
 ## Known format limitations (Cetus 4.x)
 

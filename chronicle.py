@@ -71,8 +71,6 @@ SCRIPT_DIR = pathlib.Path(__file__).parent
 DATA_DIR = SCRIPT_DIR / "chronicle_data"
 CHAPTERS_DIR = DATA_DIR / "chapters"
 
-PARSER_VERSION = "1.0.0"
-
 DEFAULT_MODEL = "claude-sonnet-4-6"
 DEFAULT_WORD_TARGET = 500
 
@@ -183,6 +181,17 @@ def get_parser_binary() -> pathlib.Path:
     return SCRIPT_DIR / "bin" / exe
 
 
+def parser_version() -> str:
+    try:
+        result = subprocess.run(
+            [str(get_parser_binary()), "--version"],
+            capture_output=True, text=True, timeout=5,
+        )
+        return result.stdout.strip().split()[-1]
+    except Exception:
+        return "unknown"
+
+
 def ensure_parser_binary():
     binary = get_parser_binary()
     if binary.exists():
@@ -195,8 +204,8 @@ def ensure_parser_binary():
 
     platform_name = "stellaris-parser.exe" if sys.platform == "win32" else "stellaris-parser"
     url = (
-        f"https://github.com/jwareheim/AARGenerator/releases/download"
-        f"/v{PARSER_VERSION}/{platform_name}"
+        "https://github.com/jwareheim/AARGenerator/releases/latest/download"
+        f"/{platform_name}"
     )
     print(f"Chronicle: downloading parser binary ({platform_name})...")
     try:
@@ -1360,7 +1369,7 @@ def main():
         print("Chronicle: No API key found.")
         print("  Set ANTHROPIC_API_KEY env var, or enter it in the Settings screen.")
 
-    print(f"Chronicle v{__version__} (parser v{PARSER_VERSION}) — http://localhost:{PORT}")
+    print(f"Chronicle v{__version__} (parser v{parser_version()}) — http://localhost:{PORT}")
     print("Press Ctrl+C to stop.\n")
 
     server = ThreadingServer(("127.0.0.1", PORT), ChronicleHandler)
