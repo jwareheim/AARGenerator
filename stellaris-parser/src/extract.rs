@@ -1,10 +1,24 @@
 use crate::error::ParserError;
 use crate::schema::{Federation, Leader, Snapshot, War};
-use jomini::{text::ArrayReader, text::ObjectReader, TextDeserializer, TextTape};
+use jomini::{text::ObjectReader, text::ValueReader, TextDeserializer, TextTape};
 use serde::{de::DeserializeOwned, Deserialize};
 use std::collections::HashMap;
 
 const PARSER_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+// Reads a name value that is either a plain scalar string (3.x) or a
+// { key = "..." ... } block (4.x). Returns the key string in both cases.
+fn read_name_str<E: jomini::Encoding + Clone>(fv: ValueReader<'_, '_, E>) -> Option<String> {
+    if let Ok(obj) = fv.clone().read_object() {
+        for (k, _, v) in obj.fields() {
+            if k.read_str().as_ref() == "key" {
+                return v.read_str().ok().map(|s| s.into_owned());
+            }
+        }
+        return None;
+    }
+    fv.read_str().ok().map(|s| s.into_owned())
+}
 
 // ── Meta ─────────────────────────────────────────────────────────────────────
 
@@ -133,9 +147,23 @@ fn read_leader_entry<E: jomini::Encoding + Clone>(obj: ObjectReader<'_, '_, E>) 
             "name" => {
                 if let Ok(name_obj) = fv.read_object() {
                     for (nk, _, nv) in name_obj.fields() {
-                        if nk.read_str().as_ref() == "first_name" {
-                            d.name = nv.read_str().ok().map(|s| s.into_owned());
-                            break;
+                        match nk.read_str().as_ref() {
+                            "first_name" => {
+                                // 3.x: name = { first_name = "..." }
+                                d.name = nv.read_str().ok().map(|s| s.into_owned());
+                            }
+                            "full_names" => {
+                                // 4.x: name = { full_names = { key = "..." } }
+                                if let Ok(fn_obj) = nv.read_object() {
+                                    for (fnk, _, fnv) in fn_obj.fields() {
+                                        if fnk.read_str().as_ref() == "key" {
+                                            d.name = fnv.read_str().ok().map(|s| s.into_owned());
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -153,6 +181,7 @@ struct RawCountry {
     name: Option<String>,
     adjective: Option<String>,
     authority: Option<String>,
+    origin: Option<String>,
     ruler_id: Option<i64>,
     capital_id: Option<i64>,
     military_power: f64,
@@ -208,7 +237,7 @@ fn extract_country_tape(
     let reader = tape.windows1252_reader();
     let mut raw_country: Option<RawCountry> = None;
     let mut country_name_map: HashMap<i64, String> = HashMap::new();
-    let mut species_vec: Vec<RawSpecies> = Vec::new();
+    let mut species_map: HashMap<i64, RawSpecies> = HashMap::new();
     let mut planet_vec: Vec<RawPlanet> = Vec::new();
     let mut galobj_map: HashMap<i64, String> = HashMap::new();
     let mut raw_wars: Vec<RawWar> = Vec::new();
@@ -226,9 +255,25 @@ fn extract_country_tape(
                 }
             }
             "species" => {
-                // Top-level species block is an unnamed array: species={ {...} {...} }
+                // 3.x: unnamed array species={ {...} {...} }, indexed by position
                 if let Ok(arr) = value.read_array() {
-                    species_vec = read_species_array(arr);
+                    for (idx, v) in arr.values().enumerate() {
+                        if let Ok(sp_obj) = v.read_object() {
+                            species_map.insert(idx as i64, read_species_entry(sp_obj));
+                        }
+                    }
+                }
+            }
+            "species_db" => {
+                // 4.x: keyed object species_db={ 989855745={...} ... }
+                if let Ok(obj) = value.read_object() {
+                    for (k, _, v) in obj.fields() {
+                        if let Ok(id) = k.read_str().parse::<i64>() {
+                            if let Ok(sp_obj) = v.read_object() {
+                                species_map.insert(id, read_species_entry(sp_obj));
+                            }
+                        }
+                    }
                 }
             }
             "planets" => {
@@ -271,6 +316,7 @@ fn extract_country_tape(
     snapshot.empire.name = country.name;
     snapshot.empire.adjective = country.adjective;
     snapshot.empire.authority = country.authority;
+    snapshot.empire.origin = country.origin;
     snapshot.empire.ethics = country.ethics;
     snapshot.empire.civics = country.civics;
 
@@ -294,8 +340,8 @@ fn extract_country_tape(
         }
     }
 
-    if let Some(idx) = country.species_id {
-        if let Some(sp) = species_vec.get(idx as usize) {
+    if let Some(sp_id) = country.species_id {
+        if let Some(sp) = species_map.get(&sp_id) {
             snapshot.empire.species_name = sp.name.clone();
             snapshot.empire.species_traits = sp.traits.clone();
             snapshot.empire.species_class = sp.class.clone().or_else(|| {
@@ -424,8 +470,13 @@ fn read_country_entry<E: jomini::Encoding + Clone>(obj: ObjectReader<'_, '_, E>)
     let mut d = RawCountry::default();
     for (fk, _op, fv) in obj.fields() {
         match fk.read_str().as_ref() {
-            "name" => d.name = fv.read_str().ok().map(|s| s.into_owned()),
-            "adjective" => d.adjective = fv.read_str().ok().map(|s| s.into_owned()),
+            "name" => d.name = read_name_str(fv),
+            "adjective" => d.adjective = read_name_str(fv),
+            "origin" => {
+                if d.origin.is_none() {
+                    d.origin = fv.read_str().ok().map(|s| s.into_owned());
+                }
+            }
             "authority" => d.authority = fv.read_str().ok().map(|s| s.into_owned()),
             "ruler" => d.ruler_id = fv.read_str().ok().and_then(|s| s.parse().ok()),
             "capital" => d.capital_id = fv.read_str().ok().and_then(|s| s.parse().ok()),
@@ -445,7 +496,7 @@ fn read_country_entry<E: jomini::Encoding + Clone>(obj: ObjectReader<'_, '_, E>)
                 }
             }
             "government" => {
-                // authority and civics live inside the government sub-block in 4.x
+                // authority, civics, and origin live inside the government sub-block in 4.x
                 if let Ok(gov_obj) = fv.read_object() {
                     for (gk, _, gv) in gov_obj.fields() {
                         match gk.read_str().as_ref() {
@@ -461,12 +512,22 @@ fn read_country_entry<E: jomini::Encoding + Clone>(obj: ObjectReader<'_, '_, E>)
                                     }
                                 }
                             }
+                            "origin" => {
+                                if d.origin.is_none() {
+                                    d.origin = gv.read_str().ok().map(|s| s.into_owned());
+                                }
+                            }
                             _ => {}
                         }
                     }
                 }
             }
             "species_index" => {
+                // 3.x: index into the unnamed species array
+                d.species_id = fv.read_str().ok().and_then(|s| s.parse().ok());
+            }
+            "founder_species_ref" => {
+                // 4.x: ID key into species_db
                 d.species_id = fv.read_str().ok().and_then(|s| s.parse().ok());
             }
             "budget" => {
@@ -815,10 +876,7 @@ fn read_planet_entry<E: jomini::Encoding + Clone>(obj: ObjectReader<'_, '_, E>) 
     let mut d = RawPlanet::default();
     for (fk, _op, fv) in obj.fields() {
         match fk.read_str().as_ref() {
-            "name" => {
-                // Scalar name (older saves). Sub-block names (4.x+) will be None.
-                d.name = fv.read_str().ok().map(|s| s.into_owned());
-            }
+            "name" => d.name = read_name_str(fv),
             "owner" => d.owner = fv.read_str().ok().and_then(|s| s.parse().ok()),
             "coordinate" => {
                 if let Ok(coord_obj) = fv.read_object() {
@@ -858,8 +916,8 @@ fn collect_galactic_objects<E: jomini::Encoding + Clone>(
         if let Ok(go_obj) = value.read_object() {
             for (gk, _, gv) in go_obj.fields() {
                 if gk.read_str().as_ref() == "name" {
-                    if let Ok(s) = gv.read_str() {
-                        map.insert(id, s.into_owned());
+                    if let Some(s) = read_name_str(gv) {
+                        map.insert(id, s);
                     }
                     break;
                 }
@@ -869,24 +927,11 @@ fn collect_galactic_objects<E: jomini::Encoding + Clone>(
     map
 }
 
-fn read_species_array<E: jomini::Encoding + Clone>(
-    arr: ArrayReader<'_, '_, E>,
-) -> Vec<RawSpecies> {
-    // Top-level species block is an array of unnamed objects: species={ {...} {...} }
-    let mut out = Vec::new();
-    for v in arr.values() {
-        if let Ok(sp_obj) = v.read_object() {
-            out.push(read_species_entry(sp_obj));
-        }
-    }
-    out
-}
-
 fn read_species_entry<E: jomini::Encoding + Clone>(obj: ObjectReader<'_, '_, E>) -> RawSpecies {
     let mut d = RawSpecies::default();
     for (fk, _op, fv) in obj.fields() {
         match fk.read_str().as_ref() {
-            "name" => d.name = fv.read_str().ok().map(|s| s.into_owned()),
+            "name" => d.name = read_name_str(fv),
             "portrait" => d.portrait = fv.read_str().ok().map(|s| s.into_owned()),
             "class" => d.class = fv.read_str().ok().map(|s| s.into_owned()),
             "traits" => {
