@@ -13,7 +13,6 @@ import subprocess
 
 REQUIRED = {
     "anthropic": "anthropic",
-    "ClauseWizard": "clausewizard",
 }
 
 
@@ -49,20 +48,18 @@ check_and_install_deps()
 # =============================================================================
 
 import http.server
-import io
 import json
 import os
 import pathlib
 import shutil
 import socketserver
+import tempfile
 import threading
 import time
 import webbrowser
-import zipfile
 from datetime import datetime, timezone
 
 import anthropic
-import ClauseWizard
 
 
 # =============================================================================
@@ -73,6 +70,8 @@ PORT = 8765
 SCRIPT_DIR = pathlib.Path(__file__).parent
 DATA_DIR = SCRIPT_DIR / "chronicle_data"
 CHAPTERS_DIR = DATA_DIR / "chapters"
+
+PARSER_VERSION = "1.0.0"
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
 DEFAULT_WORD_TARGET = 500
@@ -177,62 +176,152 @@ def get_api_key() -> str | None:
 # [5] SAVE PARSER
 # =============================================================================
 
-def parse_save(file_bytes: bytes) -> dict:
-    with zipfile.ZipFile(io.BytesIO(file_bytes)) as zf:
-        names = zf.namelist()
-        if "gamestate" not in names:
-            raise ValueError("No gamestate entry — not a valid Stellaris save.")
+def get_parser_binary() -> pathlib.Path:
+    exe = "stellaris-parser.exe" if sys.platform == "win32" else "stellaris-parser"
+    if getattr(sys, "frozen", False):
+        return pathlib.Path(sys._MEIPASS) / exe
+    return SCRIPT_DIR / "bin" / exe
 
-        meta_text = zf.read("meta").decode("utf-8", errors="replace")
-        gamestate_text = zf.read("gamestate").decode("utf-8", errors="replace")
 
-    meta_tokens = ClauseWizard.cwparse(meta_text)
-    meta = ClauseWizard.cwformat(meta_tokens)
+def ensure_parser_binary():
+    binary = get_parser_binary()
+    if binary.exists():
+        return
+    if getattr(sys, "frozen", False):
+        raise RuntimeError(f"Parser binary missing from frozen package at {binary}.")
 
+    import urllib.request
+    import stat as _stat
+
+    platform_name = "stellaris-parser.exe" if sys.platform == "win32" else "stellaris-parser"
+    url = (
+        f"https://github.com/jwareheim/AARGenerator/releases/download"
+        f"/v{PARSER_VERSION}/{platform_name}"
+    )
+    print(f"Chronicle: downloading parser binary ({platform_name})...")
     try:
-        gamestate_tokens = ClauseWizard.cwparse(gamestate_text)
-        raw = ClauseWizard.cwformat(gamestate_tokens)
+        binary.parent.mkdir(parents=True, exist_ok=True)
+        urllib.request.urlretrieve(url, str(binary))
+        if sys.platform != "win32":
+            binary.chmod(binary.stat().st_mode | _stat.S_IEXEC)
+        print("  ✓ parser binary ready")
     except Exception as exc:
-        # ClauseWizard 1.0.4 chokes on some Stellaris 4.x blocks (e.g. astral_rifts).
-        # Fall back to an empty dict so meta-only data still flows through.
-        print(f"[chronicle] Gamestate parse partial failure: {exc}", file=sys.stderr)
-        raw = {}
+        raise RuntimeError(
+            f"Could not download parser binary: {exc}\n"
+            f"Download manually: {url}\n"
+            f"Place it at: {binary}"
+        )
 
-    return extract_relevant_data(raw, meta)
 
-
-def extract_relevant_data(raw: dict, meta: dict) -> dict:
-    # TODO: implement field extraction from Clausewitz parsed dict
-    # Reference docs/save-format.md for field locations
-    snapshot = {
-        "date": meta.get("date", "unknown"),
-        "empire_name": "unknown",
-        "species_name": "unknown",
-        "portrait_class": "unknown",
-        "species_traits": [],
-        "ethics": [],
-        "civics": [],
-        "authority": "unknown",
-        "origin": "unknown",
-        "home_planet": "unknown",
-        "home_system": "unknown",
-        "patch_version": meta.get("version", "unknown"),
-        "planets": [],
-        "pop_count": 0,
-        "fleet_power": 0,
-        "income": {"energy": 0, "minerals": 0, "alloys": 0},
-        "traditions": [],
-        "perks": [],
-        "ruler": {},
-        "leaders": [],
-        "wars": [],
-        "federation": None,
-        "subjects": [],
-        "rivals": [],
-        "allies": [],
-        "recent_techs": [],
+def _raise_parser_error(code: int, detail: str):
+    messages = {
+        1: "Save file could not be read.",
+        2: "Not a valid Stellaris save file.",
+        3: f"Could not parse save: {detail}",
+        4: "Could not identify player country in this save.",
+        5: (
+            "This save uses a binary-encoded format that is not supported. "
+            "Verify the save is from Stellaris 3.x or later."
+        ),
     }
-    return snapshot
+    raise ValueError(messages.get(code, f"Parser failed (exit {code}): {detail}"))
+
+
+def parse_save(file_bytes: bytes) -> dict:
+    binary = get_parser_binary()
+    if not binary.exists():
+        raise RuntimeError(
+            f"Parser binary not found at {binary}. "
+            "Run Chronicle once normally to auto-download it, or see CONTRIBUTING.md."
+        )
+
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".sav", delete=False) as f:
+            f.write(file_bytes)
+            tmp_path = f.name
+
+        result = subprocess.run(
+            [str(binary), "extract", tmp_path],
+            capture_output=True,
+            timeout=120,
+        )
+
+        if result.returncode != 0:
+            detail = result.stderr.decode("utf-8", errors="replace").strip()
+            _raise_parser_error(result.returncode, detail)
+
+        raw = json.loads(result.stdout.decode("utf-8"))
+        return extract_relevant_data(raw)
+
+    finally:
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+
+def extract_relevant_data(raw: dict) -> dict:
+    empire = raw.get("empire", {})
+    state = raw.get("state", {})
+    ruler_raw = raw.get("ruler", {})
+    diplomacy = raw.get("diplomacy", {})
+    fed = diplomacy.get("federation")
+
+    return {
+        "date": raw.get("date", "unknown"),
+        "empire_name": empire.get("name") or "unknown",
+        "species_name": empire.get("species_name") or "unknown",
+        "portrait_class": empire.get("species_class") or "unknown",
+        "species_traits": empire.get("species_traits", []),
+        "ethics": empire.get("ethics", []),
+        "civics": empire.get("civics", []),
+        "authority": empire.get("authority") or "unknown",
+        "origin": empire.get("origin") or "unknown",
+        "home_planet": empire.get("home_planet") or "unknown",
+        "home_system": empire.get("home_system") or "unknown",
+        "patch_version": raw.get("patch_version") or "unknown",
+        "planets": state.get("owned_planets", []),
+        "pop_count": state.get("total_pops", 0),
+        "fleet_power": state.get("fleet_power", 0),
+        "income": {
+            "energy": state.get("monthly_energy", 0),
+            "minerals": state.get("monthly_minerals", 0),
+            "alloys": state.get("monthly_alloys", 0),
+        },
+        "traditions": state.get("traditions", []),
+        "perks": state.get("ascension_perks", []),
+        "ruler": {
+            "id": ruler_raw.get("id"),
+            "name": ruler_raw.get("name"),
+            "class": ruler_raw.get("class"),
+            "age": ruler_raw.get("age"),
+            "gender": ruler_raw.get("gender"),
+            "traits": ruler_raw.get("traits", []),
+        },
+        "leaders": [
+            {
+                "id": l.get("id"),
+                "name": l.get("name"),
+                "class": l.get("class"),
+                "age": l.get("age"),
+                "gender": l.get("gender"),
+                "traits": l.get("traits", []),
+            }
+            for l in raw.get("leaders", [])
+        ],
+        "wars": raw.get("wars", []),
+        "federation": {
+            "name": fed.get("name"),
+            "members": fed.get("members", []),
+            "player_role": fed.get("player_role"),
+        } if fed else None,
+        "subjects": diplomacy.get("subjects", []),
+        "rivals": diplomacy.get("rivals", []),
+        "allies": diplomacy.get("allies", []),
+        "recent_techs": state.get("recent_technologies", []),
+    }
 
 
 # =============================================================================
@@ -1262,6 +1351,7 @@ class ThreadingServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
 
 def main():
     check_and_install_deps()
+    ensure_parser_binary()
 
     DATA_DIR.mkdir(exist_ok=True)
     CHAPTERS_DIR.mkdir(exist_ok=True)
@@ -1270,7 +1360,7 @@ def main():
         print("Chronicle: No API key found.")
         print("  Set ANTHROPIC_API_KEY env var, or enter it in the Settings screen.")
 
-    print(f"Chronicle v{__version__} — http://localhost:{PORT}")
+    print(f"Chronicle v{__version__} (parser v{PARSER_VERSION}) — http://localhost:{PORT}")
     print("Press Ctrl+C to stop.\n")
 
     server = ThreadingServer(("127.0.0.1", PORT), ChronicleHandler)

@@ -24,6 +24,8 @@ The binary is called from Chronicle's Python layer via `subprocess`. It is compi
 
 ## 2. Why Rust + jomini
 
+> **Inspiration:** The approach of using Rust + jomini as the parsing layer was inspired by [stellaris-companion](https://github.com/gitmaan/stellaris-companion/), a community Stellaris save tool that demonstrated this combination is viable and performant for 4.x saves.
+
 **jomini** is the right foundation for several reasons:
 
 - Actively maintained — last updated 2026, powers production tools with large userbases

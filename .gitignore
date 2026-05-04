@@ -14,3 +14,10 @@ Thumbs.db
 # IDE
 .idea/
 *.iml
+
+/stellaris-parser/target*
+/bin/
+/plan.md
+/requirements.md
+/tasks.md
+/.claude/settings.local.json

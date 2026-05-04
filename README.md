@@ -35,7 +35,7 @@ Each chapter covers what *changed* between saves: wars, colonization, leader dea
 
 ## Known Limitations
 
-- **Ironman saves** are not yet supported (Phase 2 target)
+- **Ironman saves** are fully supported — Stellaris 4.x ironman saves use the same plaintext format as normal saves
 - **Event gaps**: if a war starts and ends between two saves, it won't appear in the diff — save at key moments
 - **Mod compatibility**: custom civics, traits, or species from mods may appear as placeholder text
 - **Single campaign**: only one campaign at a time; use Reset in Settings to start a new one
@@ -44,6 +44,12 @@ Each chapter covers what *changed* between saves: wars, colonization, leader dea
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Credits
+
+The Rust parsing layer (`stellaris-parser`) was inspired by [stellaris-companion](https://github.com/gitmaan/stellaris-companion/) by gitmaan — a community Stellaris save tool that demonstrated Rust + jomini as a viable and performant approach for Stellaris 4.x saves.
+
+Save parsing is built on the [jomini](https://github.com/nickbabcock/jomini) crate by nickbabcock, which also underpins [Rakaly](https://rakaly.com/) (the EU4 achievement tracker and save analyzer) and the [Paradox Game Converters](https://github.com/ParadoxGameConverters) project.
 
 ## License
 
